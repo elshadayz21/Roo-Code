@@ -326,6 +326,12 @@ export class Task extends EventEmitter<TaskEvents> implements TaskLike {
 	consecutiveNoAssistantMessagesCount: number = 0
 	toolUsage: ToolUsage = {}
 
+	// Governance: Phase 1 Reasoning Loop
+	// Set by SelectActiveIntentTool when the agent declares its intent.
+	// Checked by the Gatekeeper in presentAssistantMessage to block
+	// side-effect tools until an intent is selected.
+	activeIntentId: string | undefined = undefined
+
 	// Checkpoints
 	enableCheckpoints: boolean
 	checkpointTimeout: number
