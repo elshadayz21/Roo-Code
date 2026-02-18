@@ -79,14 +79,53 @@ async function generatePrompt(
 		getSkillsSection(skillsManager, mode as string),
 	])
 
-	// Tools catalog is not included in the system prompt.
-	const toolsCatalog = ""
+	// Read active intents at prompt generation time so the AI already knows the IDs
+	let intentsList = ""
+	try {
+		const fs = await import("fs/promises")
+		const path = await import("path")
+		const yamlModule = await import("yaml")
 
-	const basePrompt = `${roleDefinition}
+		// Try current directory and workspace root
+		const possiblePaths = [
+			path.join(cwd, ".orchestration", "active_intents.yaml"),
+			path.join(cwd, "Roo-Code", ".orchestration", "active_intents.yaml"),
+		]
+
+		let content = ""
+		let foundPath = ""
+		for (const p of possiblePaths) {
+			try {
+				content = await fs.readFile(p, "utf-8")
+				foundPath = p
+				break
+			} catch {}
+		}
+
+		if (content) {
+			const data = yamlModule.parse(content)
+			if (data?.active_intents && Array.isArray(data.active_intents)) {
+				intentsList = data.active_intents.map((i: any) => `- ${i.id}: ${i.name} [${i.status}]`).join("\n")
+				console.log(`[SystemPrompt] Injected ${data.active_intents.length} intents from ${foundPath}`)
+			}
+		} else {
+			console.log(`[SystemPrompt] No orchestration file found in: ${possiblePaths.join(", ")}`)
+		}
+	} catch (err) {
+		console.error("[SystemPrompt] Failed to inject intents:", err)
+	}
+
+	const constitution = intentsList
+		? `You are an Intent-Driven Architect. You CANNOT write code or use any tools immediately. Your first action MUST be to analyze the user request and call select_active_intent to load the necessary context. Available Intent IDs:\n${intentsList}\nCall select_active_intent with the appropriate Intent ID to proceed.`
+		: `You are an Intent-Driven Architect. You CANNOT write code or use any tools immediately. Your first action MUST be to call select_active_intent with a valid Intent ID from .orchestration/active_intents.yaml before performing any other actions.`
+
+	const basePrompt = `${constitution}
+
+${roleDefinition}
 
 ${markdownFormattingSection()}
 
-${getSharedToolUseSection()}${toolsCatalog}
+${getSharedToolUseSection()}
 
 	${getToolUseGuidelinesSection()}
 
