@@ -703,7 +703,7 @@ export async function presentAssistantMessage(cline: Task) {
 						})
 						break
 					}
-					// Fall through to the actual tool dispatch below
+					break
 				}
 				default:
 					break
