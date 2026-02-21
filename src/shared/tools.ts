@@ -81,6 +81,12 @@ export const toolParamNames = [
 	"files",
 	"line_ranges",
 	"intent_id",
+	// Semantic mutation tracking (Phase 3 AI-Native Git Layer)
+	"mutation_class",
+	// Phase 4: Optimistic locking & lesson recording
+	"expected_hash",
+	"lesson",
+	"trigger",
 ] as const
 
 export type ToolParamName = (typeof toolParamNames)[number]
@@ -115,7 +121,20 @@ export type NativeToolArgs = {
 	switch_mode: { mode_slug: string; reason: string }
 	update_todo_list: { todos: string }
 	use_mcp_tool: { server_name: string; tool_name: string; arguments?: Record<string, unknown> }
-	write_to_file: { path: string; content: string }
+	write_to_file: {
+		path: string
+		content: string
+		/** The intent/requirement ID this write is bound to (e.g. "REQ-001"). Injected into agent_trace.jsonl `related` array. */
+		intent_id?: string
+		/** Semantic classification of this write for the audit ledger. */
+		mutation_class?: "AST_REFACTOR" | "INTENT_EVOLUTION"
+		/** Optimistic locking: the sha256 hash the agent last observed for this file. If the file has changed, the write is blocked. */
+		expected_hash?: string
+	}
+	record_lesson: {
+		lesson: string
+		trigger: "test_failure" | "lint_failure" | "agent_correction" | "user_feedback"
+	}
 	select_active_intent: { intent_id: string }
 	// Add more tools as they are migrated to native protocol
 }
@@ -296,6 +315,7 @@ export const TOOL_DISPLAY_NAMES: Record<ToolName, string> = {
 	skill: "load skill",
 	generate_image: "generate images",
 	select_active_intent: "select active intent",
+	record_lesson: "record lesson",
 	custom_tool: "use custom tools",
 } as const
 
