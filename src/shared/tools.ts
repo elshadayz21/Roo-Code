@@ -83,6 +83,10 @@ export const toolParamNames = [
 	"intent_id",
 	// Semantic mutation tracking (Phase 3 AI-Native Git Layer)
 	"mutation_class",
+	// Phase 4: Optimistic locking & lesson recording
+	"expected_hash",
+	"lesson",
+	"trigger",
 ] as const
 
 export type ToolParamName = (typeof toolParamNames)[number]
@@ -124,6 +128,12 @@ export type NativeToolArgs = {
 		intent_id?: string
 		/** Semantic classification of this write for the audit ledger. */
 		mutation_class?: "AST_REFACTOR" | "INTENT_EVOLUTION"
+		/** Optimistic locking: the sha256 hash the agent last observed for this file. If the file has changed, the write is blocked. */
+		expected_hash?: string
+	}
+	record_lesson: {
+		lesson: string
+		trigger: "test_failure" | "lint_failure" | "agent_correction" | "user_feedback"
 	}
 	select_active_intent: { intent_id: string }
 	// Add more tools as they are migrated to native protocol

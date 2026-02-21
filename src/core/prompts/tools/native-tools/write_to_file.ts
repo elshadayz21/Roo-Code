@@ -43,8 +43,13 @@ export default {
 					description:
 						"(Optional) Semantic classification of this file write. Use 'AST_REFACTOR' for pure syntax changes (rename, reformat) that do not alter intent, and 'INTENT_EVOLUTION' for new features, new functions, or new business logic.",
 				},
+				expected_hash: {
+					type: ["string", "null"],
+					description:
+						"(Optional) The sha256 hash (format: 'sha256:<hex>') of the file content you last read. Enables optimistic locking: if the file has been modified by another agent or human since you read it, the write will be blocked and you will be asked to re-read the latest version.",
+				},
 			},
-			required: ["path", "content", "intent_id", "mutation_class"],
+			required: ["path", "content", "intent_id", "mutation_class", "expected_hash"],
 			additionalProperties: false,
 		},
 	},

@@ -21,6 +21,7 @@ export const SAFE_TOOLS: ReadonlySet<string> = new Set([
 	"read_command_output",
 	"select_active_intent",
 	"update_todo_list",
+	"record_lesson", // Phase 4: append-only, never destructive
 ])
 
 export const DESTRUCTIVE_TOOLS: ReadonlySet<string> = new Set([
