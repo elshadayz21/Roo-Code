@@ -20,7 +20,6 @@ export default {
 	function: {
 		name: "write_to_file",
 		description: WRITE_TO_FILE_DESCRIPTION,
-		strict: true,
 		parameters: {
 			type: "object",
 			properties: {
@@ -33,24 +32,23 @@ export default {
 					description: CONTENT_PARAMETER_DESCRIPTION,
 				},
 				intent_id: {
-					type: ["string", "null"],
+					type: "string",
 					description:
 						"(Optional) The requirement or intent ID this write is bound to (e.g. \"REQ-001\"). Injected into the agent_trace.jsonl 'related' array for full traceability.",
 				},
 				mutation_class: {
-					type: ["string", "null"],
-					enum: ["AST_REFACTOR", "INTENT_EVOLUTION", null],
+					type: "string",
+					enum: ["AST_REFACTOR", "INTENT_EVOLUTION"],
 					description:
 						"(Optional) Semantic classification of this file write. Use 'AST_REFACTOR' for pure syntax changes (rename, reformat) that do not alter intent, and 'INTENT_EVOLUTION' for new features, new functions, or new business logic.",
 				},
 				expected_hash: {
-					type: ["string", "null"],
+					type: "string",
 					description:
 						"(Optional) The sha256 hash (format: 'sha256:<hex>') of the file content you last read. Enables optimistic locking: if the file has been modified by another agent or human since you read it, the write will be blocked and you will be asked to re-read the latest version.",
 				},
 			},
-			required: ["path", "content", "intent_id", "mutation_class", "expected_hash"],
-			additionalProperties: false,
+			required: ["path", "content"],
 		},
 	},
 } satisfies OpenAI.Chat.ChatCompletionTool
