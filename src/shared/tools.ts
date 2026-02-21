@@ -315,6 +315,7 @@ export const TOOL_DISPLAY_NAMES: Record<ToolName, string> = {
 	skill: "load skill",
 	generate_image: "generate images",
 	select_active_intent: "select active intent",
+	record_lesson: "record lesson",
 	custom_tool: "use custom tools",
 } as const
 
