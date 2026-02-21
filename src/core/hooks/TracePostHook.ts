@@ -1,34 +1,63 @@
-import { ToolHook, HookContext, HookResult } from "./ToolHook"
 import * as path from "path"
 import * as fs from "fs/promises"
 import * as crypto from "crypto"
+import { ToolHook, HookContext, HookResult } from "./ToolHook"
 import { getWorkspacePath } from "../../utils/path"
 import { fileExistsAtPath } from "../../utils/fs"
 import { ToolResponse } from "../../shared/tools"
+import { hashContent } from "./SpatialHasher"
+import { classifyMutation, MutationClass } from "./MutationClassifier"
+
+/**
+ * Full Agent Trace entry schema.
+ * Matches the specification defined in .orchestration/agent_trace.jsonl.
+ */
+interface TraceRange {
+	start_line: number
+	end_line: number
+	content_hash: string
+	mutation_class: MutationClass
+}
+
+interface TraceRelated {
+	type: "specification" | "requirement" | "intent"
+	value: string
+}
+
+interface TraceConversation {
+	url?: string
+	contributor?: { entity_type: string; model_identifier?: string }
+	ranges?: TraceRange[]
+	related?: TraceRelated[]
+}
+
+interface TraceFile {
+	relative_path: string
+	conversations?: TraceConversation[]
+}
 
 interface TraceEntry {
 	id: string
 	timestamp: string
 	vcs?: { revision_id: string }
-	files?: Array<{
-		relative_path: string
-		conversations?: Array<{
-			url?: string
-			contributor?: { entity_type: string; model_identifier?: string }
-			ranges?: Array<{
-				start_line: number
-				end_line: number
-				content_hash: string
-			}>
-			related?: Array<{ type: string; value: string }>
-		}>
-	}>
+	files?: TraceFile[]
 }
 
+/**
+ * TracePostHook — Phase 1 + Phase 3 enhanced.
+ *
+ * After every file-mutating tool completes, this hook:
+ * 1. Computes a SHA-256 content hash (spatial independence).
+ * 2. Classifies the mutation as AST_REFACTOR or INTENT_EVOLUTION.
+ * 3. Constructs one TraceEntry per modified file.
+ * 4. Injects both the activeIntentId AND any explicit intent_id (REQ-ID)
+ *    from the tool params into the `related` array.
+ * 5. Appends the entry as a JSONL line to .orchestration/agent_trace.jsonl.
+ */
 export class TracePostHook implements ToolHook {
 	readonly id = "trace-post-hook"
 
-	private readonly mutatingTools = [
+	private readonly mutatingTools = new Set([
 		"write_to_file",
 		"apply_diff",
 		"edit",
@@ -36,11 +65,7 @@ export class TracePostHook implements ToolHook {
 		"search_replace",
 		"edit_file",
 		"apply_patch",
-	]
-
-	private computeSha256(content: string): string {
-		return `sha256:${crypto.createHash("sha256").update(content, "utf8").digest("hex")}`
-	}
+	])
 
 	async onPreExecute(context: HookContext): Promise<HookResult> {
 		return { blocked: false }
@@ -49,40 +74,42 @@ export class TracePostHook implements ToolHook {
 	async onPostExecute(context: HookContext, result: ToolResponse): Promise<void> {
 		const { task, block } = context
 
-		if (!this.mutatingTools.includes(block.name)) {
+		if (!this.mutatingTools.has(block.name)) {
 			return
 		}
 
-		// Only operate if there's an active intent bounding this work
 		if (!task.activeIntentId) {
 			return
 		}
 
-		let relativePath = ""
-		let contentToHash = ""
-		let startLine = 1
-		let endLine = 1
-
-		// Extract target file paths and content from params heuristically
 		const params = block.params as Record<string, any>
-		const filePath = params.path || params.file_path || ""
+		const nativeArgs = (block as any).nativeArgs as Record<string, any> | undefined
+
+		// Prefer nativeArgs (typed) over legacy params for write_to_file
+		const filePath: string = nativeArgs?.path ?? params.path ?? params.file_path ?? ""
 
 		if (!filePath) {
 			return
 		}
 
 		const workspaceRoot = getWorkspacePath()
-		// Try to resolve relative path
-		if (path.isAbsolute(filePath)) {
-			relativePath = path.relative(workspaceRoot, filePath)
-		} else {
-			relativePath = filePath
-		}
 
-		// Try to extract content to hash
+		const relativePath = path.isAbsolute(filePath)
+			? path.relative(workspaceRoot, filePath).replace(/\\/g, "/")
+			: filePath.replace(/\\/g, "/")
+
+		// === Extract content for hashing ===
+		let contentToHash = ""
+		let startLine = 1
+		let endLine = 1
+		let isNewFile = false
+
 		if (block.name === "write_to_file") {
-			contentToHash = params.content || ""
+			contentToHash = nativeArgs?.content ?? params.content ?? ""
 			endLine = contentToHash.split("\n").length
+			// Detect new file: check if the file existed before this write
+			const absPath = path.isAbsolute(filePath) ? filePath : path.join(workspaceRoot, filePath)
+			isNewFile = !(await fileExistsAtPath(absPath))
 		} else if (params.diff) {
 			contentToHash = params.diff
 			endLine = contentToHash.split("\n").length
@@ -93,12 +120,11 @@ export class TracePostHook implements ToolHook {
 			contentToHash = params.patch
 			endLine = contentToHash.split("\n").length
 		} else {
-			// Fallback: we cannot reliably determine the content segment created by this tool
-			// So we hash the entire target file if it exists
+			// Fallback: hash the entire file if we can read it
 			try {
-				const fullAbsPath = path.isAbsolute(filePath) ? filePath : path.join(workspaceRoot, filePath)
-				if (await fileExistsAtPath(fullAbsPath)) {
-					contentToHash = await fs.readFile(fullAbsPath, "utf-8")
+				const absPath = path.isAbsolute(filePath) ? filePath : path.join(workspaceRoot, filePath)
+				if (await fileExistsAtPath(absPath)) {
+					contentToHash = await fs.readFile(absPath, "utf-8")
 					endLine = contentToHash.split("\n").length
 				}
 			} catch (e) {
@@ -107,21 +133,51 @@ export class TracePostHook implements ToolHook {
 		}
 
 		if (!contentToHash) {
-			return // Nothing to trace
+			return
 		}
 
-		const contentHash = this.computeSha256(contentToHash)
+		// === Phase 3: Semantic Classification ===
+		const explicitMutationClass = (nativeArgs?.mutation_class ?? params.mutation_class) as
+			| "AST_REFACTOR"
+			| "INTENT_EVOLUTION"
+			| null
+			| undefined
 
+		const mutationClass = classifyMutation({
+			explicitClass: explicitMutationClass,
+			content: contentToHash,
+			isNewFile,
+		})
+
+		// === Phase 3: REQ-ID injection ===
+		// Build the `related` array combining activeIntentId and explicit tool-level intent_id
+		const relatedEntries: TraceRelated[] = [
+			{
+				type: "specification",
+				value: task.activeIntentId,
+			},
+		]
+
+		const explicitIntentId: string | null | undefined = nativeArgs?.intent_id ?? params.intent_id ?? null
+
+		if (explicitIntentId && explicitIntentId !== task.activeIntentId) {
+			relatedEntries.push({
+				type: "requirement",
+				value: explicitIntentId,
+			})
+		}
+
+		// === Build the full Trace Entry ===
 		const traceEntry: TraceEntry = {
 			id: crypto.randomUUID(),
 			timestamp: new Date().toISOString(),
-			vcs: { revision_id: "unavailable" }, // Alternatively invoke git rev-parse HEAD here if available
+			vcs: { revision_id: "unavailable" },
 			files: [
 				{
 					relative_path: relativePath,
 					conversations: [
 						{
-							url: task.taskId, // using task id as conversation id proxy
+							url: task.taskId,
 							contributor: {
 								entity_type: "AI",
 								model_identifier: task.api.getModel().id,
@@ -130,25 +186,21 @@ export class TracePostHook implements ToolHook {
 								{
 									start_line: startLine,
 									end_line: endLine,
-									content_hash: contentHash,
+									content_hash: hashContent(contentToHash),
+									mutation_class: mutationClass,
 								},
 							],
-							related: [
-								{
-									type: "specification",
-									value: task.activeIntentId,
-								},
-							],
+							related: relatedEntries,
 						},
 					],
 				},
 			],
 		}
 
+		// === Append to agent_trace.jsonl ===
 		const traceLedgerPath = path.join(workspaceRoot, ".orchestration", "agent_trace.jsonl")
 
 		try {
-			// Ensure dir exists
 			const dir = path.dirname(traceLedgerPath)
 			if (!(await fileExistsAtPath(dir))) {
 				await fs.mkdir(dir, { recursive: true })
@@ -156,8 +208,9 @@ export class TracePostHook implements ToolHook {
 
 			const jsonlLine = JSON.stringify(traceEntry) + "\n"
 			await fs.appendFile(traceLedgerPath, jsonlLine, "utf-8")
+
 			console.log(
-				`[TracePostHook] Written trace entry for ${relativePath} bounded to intent ${task.activeIntentId}`,
+				`[TracePostHook] Appended trace: ${relativePath} | class=${mutationClass} | hash=${traceEntry.files![0].conversations![0].ranges![0].content_hash.slice(0, 20)}... | intent=${task.activeIntentId}`,
 			)
 		} catch (error) {
 			console.error("[TracePostHook] Failed to append trace entry:", error)

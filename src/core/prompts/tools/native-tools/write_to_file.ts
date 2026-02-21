@@ -32,8 +32,19 @@ export default {
 					type: "string",
 					description: CONTENT_PARAMETER_DESCRIPTION,
 				},
+				intent_id: {
+					type: ["string", "null"],
+					description:
+						"(Optional) The requirement or intent ID this write is bound to (e.g. \"REQ-001\"). Injected into the agent_trace.jsonl 'related' array for full traceability.",
+				},
+				mutation_class: {
+					type: ["string", "null"],
+					enum: ["AST_REFACTOR", "INTENT_EVOLUTION", null],
+					description:
+						"(Optional) Semantic classification of this file write. Use 'AST_REFACTOR' for pure syntax changes (rename, reformat) that do not alter intent, and 'INTENT_EVOLUTION' for new features, new functions, or new business logic.",
+				},
 			},
-			required: ["path", "content"],
+			required: ["path", "content", "intent_id", "mutation_class"],
 			additionalProperties: false,
 		},
 	},
